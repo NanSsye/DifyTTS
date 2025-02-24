@@ -1,0 +1,19 @@
+[DifyTTS]
+enable = true
+api-key = ""
+base-url = ""
+
+commands = ["tts"]
+other-plugin-cmd = []
+command-tip = "请输入要对话的内容"
+
+price = 0
+admin_ignore = true
+whitelist_ignore = true
+
+http-proxy = ""
+
+tts_api_key = ""
+tts_model_id = ""
+tts_format = "mp3"
+tts_api_url = ""
