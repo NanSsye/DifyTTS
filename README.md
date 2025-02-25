@@ -1,86 +1,73 @@
-# 适用于 XYBotV2 🤖🗣️ 的 DifyTTS 插件
+# XYBotV2 Dify 增强插件
+
+[![Awesome Badge](https://img.shields.io/badge/Enhanced-XYBotV2--Dify--Plugin-blue)](https://github.com/your-repo-link)
+
+本仓库提供了一个增强版的 [XYBotV2](https://github.com/your-xybotv2-repo) Dify 插件，在原版基础上增加了更多消息类型支持和更灵活的配置选项。🎉
 
 ## 简介
 
-DifyTTS 插件是一款强大的 XYBotV2 扩展，它将 Dify AI 的智能对话能力与文本转语音 (TTS) 功能完美结合，让你的聊天机器人不仅能说会道，还能拥有个性化的声音！ 想象一下，你的机器人用 邓紫棋 🎤 的声音和你聊天，是不是超酷 der？ 😎
+此插件扩展了原有的 XYBotV2 Dify 插件，使其能够处理更多类型的微信消息，并提供更灵活的配置选项，例如控制是否对所有对话进行语音回复。 旨在为 XYBotV2 用户提供更强大的 AI 对话体验。
 
-## 主要特性 🌟
+## 原版插件功能
 
-*   **Dify AI 集成 🧠**： 接入 Dify AI 平台，赋予机器人强大的对话能力，让它成为真正的聊天大师。
-*   **TTS 语音合成 🗣️**： 将 Dify AI 的回复实时转换为语音，支持多种语音格式，让你的机器人“声”临其境。
-*   **多种消息类型支持 💬**： 无论是文本、@消息，还是语音、图片、视频、文件，DifyTTS 都能轻松处理。
-*   **灵活的配置 ⚙️**： 通过简单的 `config.toml` 文件，即可配置 Dify AI 和 TTS 服务的 API 密钥、地址等参数。
-*   **经济实惠的积分系统 💰**： 内置积分系统，可以控制用户使用插件的频率，防止滥用，让你的机器人可持续发展。
+*   集成 [Dify](https://dify.ai/) 的强大 AI 功能到 XYBotV2 微信机器人中。
+*   支持文本消息对话。
+*   基于命令触发 AI 对话。
 
-## 安装指南 🛠️
+## 增强功能
 
-1.  **下载插件 📥**： 将 `main.py` 文件保存到 `plugins/DifyTTS/` 目录下。
-2.  **配置参数 ⚙️**： 在 `plugins/DifyTTS/` 目录下创建 `config.toml` 文件，并按照下面的示例配置参数。
-3.  **重启 XYBotV2 🔄**： 重启 XYBotV2，让插件加载生效。
+*   **多消息类型支持：** 除了文本消息，现在还支持处理语音消息、图片消息、视频消息和文件消息。 🖼️🎤🎬
+*   **可配置语音回复：** 新增选项，可选择对所有对话进行语音回复，或仅在发送语音消息时回复。 🗣️
+*   **更灵活的配置：** 通过 `config.toml` 文件轻松配置 API 密钥、基本 URL、命令等。 ⚙️
 
-## config.toml 配置示例 📝
+## 依赖插件
+
+*   [XYBotV2](https://github.com/your-xybotv2-repo)：微信机器人框架
+*   [speech\_recognition](https://pypi.org/project/SpeechRecognition/)：语音识别库
+*   [gTTS](https://pypi.org/project/gTTS/)：文本转语音库
+*   [filetype](https://github.com/h2non/filetype.py)：文件类型识别库
+*   [aiohttp](https://docs.aiohttp.org/en/stable/)：异步 HTTP 客户端
+
+## 安装步骤
+
+1.  **安装 XYBotV2 和原版 Dify 插件：** 确保你已经成功安装并配置了 [XYBotV2](https://github.com/your-xybotv2-repo) 和原版的 Dify 插件。
+2.  **替换插件文件：** 将本仓库中的 `Dify` 文件夹复制到 XYBotV2 的 `plugins` 目录下，**覆盖**原有的 Dify 插件文件。
+3.  **安装 Python 依赖：** 进入 XYBotV2 根目录，安装插件所需的 Python 依赖。
+
+    ```bash
+    pip install SpeechRecognition gTTS filetype aiohttp
+    ```
+
+    如果安装 `SpeechRecognition` 失败，请参考 [官方文档](https://pypi.org/project/SpeechRecognition/) 进行安装。
+4.  **安装 ffmpeg (语音转文字功能需要)：** 确保你的系统已经安装了 `ffmpeg`。
+
+    *   **Debian/Ubuntu：**
+
+        ```bash
+        sudo apt update
+        sudo apt install ffmpeg
+        ```
+
+    *   **macOS (使用 Homebrew)：**
+
+        ```bash
+        brew install ffmpeg
+        ```
+5.  **配置插件：** 修改 `plugins/Dify/config.toml` 文件，填入你的 Dify API 密钥、基本 URL 等信息。
+
+## 配置
+
+### config.toml
 
 ```toml
-[DifyTTS]
-enable = true  # 启用插件
-api-key = "YOUR_DIFY_API_KEY"  # Dify AI 平台的 API 密钥
-base-url = ""  # Dify AI 平台的 API 地址
-
-commands = ["tts"]  # 触发对话的命令列表
-other-plugin-cmd = []  # 其他插件的命令列表（用于避免冲突）
-command-tip = "请输入要对话的内容"  # 命令提示信息
-
-price = 0  # 每次对话消耗的积分
-admin_ignore = true  # 管理员是否忽略积分限制
-whitelist_ignore = true  # 白名单用户是否忽略积分限制
-
-http-proxy = ""  # HTTP 代理地址（可选，留空表示不使用代理）
-
-tts_api_key = ""  # TTS 服务的 API 密钥
-tts_model_id = ""  # TTS 服务的模型 ID
-tts_format = "mp3"  # TTS 服务的音频格式（例如：mp3, wav）
-tts_api_url = "https://api.fish.audio/v1/tts"  # TTS 服务的 API 地址
- ```
-## 详细参数说明 🧐
-
-*   `DifyTTS.enable`： 启用/禁用插件。
-*   `DifyTTS.api-key`： 你的 Dify AI 平台的 API 密钥。🔑
-*   `DifyTTS.base-url`： 你的 Dify AI 平台的 API 地址。 🌐
-*   `DifyTTS.commands`： 用于触发 Dify 对话的命令列表。 可以自定义，例如 `["tts", "对话"]`。 🗣️
-*   `DifyTTS.other-plugin-cmd`： 用于避免与其他插件命令冲突的命令列表。 🚫
-*   `DifyTTS.command-tip`： 当用户输入错误命令时，机器人给出的提示信息。 ℹ️
-*   `DifyTTS.price`： 每次使用 DifyTTS 插件消耗的积分。 💰
-*   `DifyTTS.admin_ignore`： 管理员是否忽略积分限制。 👑
-*   `DifyTTS.whitelist_ignore`： 白名单用户是否忽略积分限制。 ✅
-*   `DifyTTS.http-proxy`： HTTP 代理地址，如果需要使用代理才能访问 Dify AI 平台，请设置此项。 ☁️
-*   `DifyTTS.tts_api_key`： 你的 TTS 服务的 API 密钥。 🔑
-*   `DifyTTS.tts_model_id`： 你的 TTS 服务的模型 ID，用于指定使用的语音模型。 🗣️
-*   `DifyTTS.tts_format`： TTS 服务的音频格式，常用的有 "mp3" 和 "wav"。 🎵
-*   `DifyTTS.tts_api_url`： 你的 TTS 服务的 API 地址。 🌐
-
-## 使用方法 🚀
-
-在微信中，使用配置的命令（例如 `tts 你好`）与机器人对话，DifyTTS 插件会将你的文本发送给 Dify AI，然后将 Dify AI 返回的文本转换为语音，最后将语音消息发送给你。
-
-## 依赖 🧩
-
-*   XYBotV2
-*   aiohttp
-*   filetype
-*   loguru
-*   httpx
-*   ormsgpack
-*   pydantic
-
-## 常见问题 🤔
-
-*   **Q: 为什么机器人没有回复？**
-    *   A: 请检查 XYBotV2 的日志文件（`logs/xybot.log`），查看是否有错误信息。 确保 Dify AI 和 TTS 服务的 API 密钥和地址配置正确，并且服务正常运行。
-*   **Q: 为什么语音消息发送失败？**
-    *   A: 请检查 TTS 服务的 API 密钥和地址配置是否正确，以及 TTS 服务是否正常运行。 还要确保您选择的 TTS 模型支持中文，并与 DifyTTS 插件配置的编码格式一致。
-
-
-## 许可证 📜
-
-MIT
-
+[Dify]
+enable = true  # 是否启用插件
+api-key = "你的 Dify API 密钥"  # 替换为你的 Dify API 密钥 🔑
+base-url = "你的 Dify API 地址"  # 替换为你的 Dify API 地址 🌐
+commands = ["/dify", "/chat"]  # 触发 Dify 对话的命令
+command-tip = "请输入你想说的话"  # 命令提示语
+price = 1  # 使用 Dify 功能所需积分（XYBotV2主程序功能）💰
+admin_ignore = true  # 管理员是否忽略积分检查
+whitelist_ignore = true # 白名单是否忽略积分检查
+http-proxy = ""  # HTTP 代理（可选）
+voice_reply_all = false  # 是否对所有对话进行语音回复 📢
