@@ -1,0 +1,14 @@
+[Dify]
+  enable = true
+  api-key = "xxxxxx" # Dify的API Key
+  base-url = "xxxxxx/v1" #Dify API接口base url
+  commands = ["老夏", "dify", "聊天", "AI"]
+  command-tip = """-----XYBot-----
+  💬AI聊天指令：
+  聊天 请求内容
+  """
+  price = 0
+  admin_ignore = true
+  whitelist_ignore = true
+  http-proxy = ""
+  voice_reply_all = false
