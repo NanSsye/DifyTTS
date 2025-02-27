@@ -27,7 +27,7 @@ TEXT_TO_VOICE_FAILED = "\n文本转语音失败"
 
 class Dify(PluginBase):
     description = "Dify插件"
-    author = "HenryXiaoYang"
+    author = "HenryXiaoYang/老夏的金库"
     version = "1.1.1"
 
     def __init__(self):
