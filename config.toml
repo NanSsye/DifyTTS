@@ -1,7 +1,7 @@
 [Dify]
   enable = true
-  api-key = "app-9hiqqQIi8bZfvmaFc56WPyYH" # Dify的API Key
-  base-url = "http://192.168.6.19:8080/v1" #Dify API接口base url
+  api-key = "Key" # Dify的API Key
+  base-url = "http://DIfy接口/v1" #Dify API接口base url
   commands = ["老夏", "dify", "聊天", "AI"]
   command-tip = """-----XYBot-----
   💬AI聊天指令：
@@ -12,8 +12,8 @@
   whitelist_ignore = true
   http-proxy = ""
 
-  audio-to-text-url = "http://192.168.6.19:8080/v1/audio-to-text"
-  text-to-audio-url = "http://192.168.6.19:8080/v1/text-to-audio"
+  audio-to-text-url = "http://你的dify语音转文字/v1/audio-to-text"
+  text-to-audio-url = "http://你的dify文字转语音/v1/text-to-audio"
 
   robot-names = ["毛球", "DifyBot", "智能助手"]
   voice_reply_all = false #默认false
