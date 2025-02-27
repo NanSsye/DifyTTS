@@ -8,7 +8,6 @@ from typing import Optional, Union
 import aiohttp
 import filetype
 from loguru import logger
-import speech_recognition as sr
 import os
 from WechatAPI import WechatAPIClient
 from database.XYBotDB import XYBotDB
