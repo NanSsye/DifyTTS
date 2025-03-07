@@ -1,19 +1,62 @@
 [Dify]
-  enable = true
-  api-key = "Key" # Dify的API Key
-  base-url = "http://DIfy接口/v1" #Dify API接口base url
-  commands = ["老夏", "dify", "聊天", "AI"]
-  command-tip = """-----XYBot-----
-  💬AI聊天指令：
-  聊天 请求内容
-  """
-  price = 0
-  admin_ignore = true
-  whitelist_ignore = true
-  http-proxy = ""
+enable = true
+default-model = "学姐"  # 默认使用的模型
+commands = ["老夏", "学姐", "聊天", "AI"]
+command-tip = """-----XYBot-----
+💬AI聊天指令：
+1. 切换模型（将会一直保持到下次切换）：
+   - @学姐 切换：切换到学姐模型
+   - @老夏 切换：切换到老夏模型
+2. 临时使用其他模型：
+   - @学姐 消息内容：临时使用学姐模型
+   - @老夏 消息内容：临时使用老夏模型"""
+admin_ignore = true
+whitelist_ignore = true
+http-proxy = ""
+voice_reply_all = false
+robot-names = ["毛球", "DifyBot", "智能助手"]
+audio-to-text-url = "http://192.168.6.19:8080/v1/audio-to-text"
+text-to-audio-url = "http://192.168.6.19:8080/v1/text-to-audio"
 
-  audio-to-text-url = "http://你的dify语音转文字/v1/audio-to-text"
-  text-to-audio-url = "http://你的dify文字转语音/v1/text-to-audio"
+[Dify.models]
+# 学姐模型配置
+[Dify.models."学姐"]
+api-key = "app-9hiqqQIi8bZfvmaFc56WPyYH"
+base-url = "http://192.168.6.19:8080/v1"
+trigger-words = ["@学姐", "学姐"]
+price = 0
 
-  robot-names = ["毛球", "DifyBot", "智能助手"]
-  voice_reply_all = false #默认false
+# 老夏模型配置
+[Dify.models."老夏"]
+api-key = "app-hC8IG2ab6QKxvG0ElokVANBK"
+base-url = "http://192.168.6.19:8080/v1"
+trigger-words = ["@老夏", "老夏"]
+price = 0
+
+# GPT-4模型配置
+[Dify.models.gpt4]
+api-key = "your-gpt4-api-key"
+base-url = "your-gpt4-base-url"
+trigger-words = ["@gpt4", "gpt4", "GPT4"]
+price = 5
+
+# Claude模型配置
+[Dify.models.claude]
+api-key = "your-claude-api-key"
+base-url = "your-claude-base-url"
+trigger-words = ["@claude", "claude", "Claude"]
+price = 3
+
+# Gemini模型配置
+[Dify.models.gemini]
+api-key = "your-gemini-api-key"
+base-url = "your-gemini-base-url"
+trigger-words = ["@gemini", "gemini", "Gemini"]
+price = 2
+
+# ChatGLM模型配置
+[Dify.models.chatglm]
+api-key = "your-chatglm-api-key"
+base-url = "your-chatglm-base-url"
+trigger-words = ["@chatglm", "chatglm", "ChatGLM"]
+price = 1 
