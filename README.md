@@ -4,6 +4,7 @@
 
 本插件为 [XYBotV2](https://github.com/HenryXiaoYang/XYBotV2) 提供 Dify 集成，允许机器人通过 Dify 与用户进行对话、处理语音和图片消息，并支持聊天室管理等功能。让你的 XYBot 瞬间变身智能助理！✨
 
+<img src="https://github.com/user-attachments/assets/a2627960-69d8-400d-903c-309dbeadf125" width="400" height="600">
 ## 特性
 
 * **多模型支持:**  支持配置多个 Dify 模型，并可根据用户指令动态切换。想用哪个用哪个！ 🤩
@@ -159,4 +160,4 @@ price = 1
 
 **感谢** [XYBotV2](https://github.com/HenryXiaoYang/XYBotV2) **提供的平台。也感谢你的使用！ 🙏**
 ```
-<img src="https://github.com/user-attachments/assets/a2627960-69d8-400d-903c-309dbeadf125" width="400" height="600">
+
