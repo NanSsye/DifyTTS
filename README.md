@@ -159,4 +159,4 @@ price = 1
 
 **感谢** [XYBotV2](https://github.com/HenryXiaoYang/XYBotV2) **提供的平台。也感谢你的使用！ 🙏**
 ```
-
+<img src="https://github.com/user-attachments/assets/a2627960-69d8-400d-903c-309dbeadf125" width="400" height="600">
