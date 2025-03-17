@@ -274,6 +274,7 @@ class ModelConfig:
     base_url: str
     trigger_words: list[str]
     price: int
+    wakeup_words: list[str] = field(default_factory=list)  # 添加唤醒词列表字段
 
 class Dify(PluginBase):
     description = "Dify插件"
@@ -317,7 +318,9 @@ class Dify(PluginBase):
                     api_key=model_config["api-key"],
                     base_url=model_config["base-url"],
                     trigger_words=model_config["trigger-words"],
-                    price=model_config["price"]
+                    price=model_config["price"],
+                    # 如果有唤醒词配置则加载,否则使用空列表
+                    wakeup_words=model_config.get("wakeup-words", [])
                 )
             
             # 设置当前使用的模型
@@ -334,6 +337,22 @@ class Dify(PluginBase):
         # 创建文件存储目录
         os.makedirs(self.files_dir, exist_ok=True)
 
+        # 创建唤醒词到模型的映射
+        self.wakeup_word_to_model = {}
+        logger.info("开始加载唤醒词配置:")
+        for model_name, model_config in self.models.items():
+            logger.info(f"处理模型 '{model_name}' 的唤醒词列表: {model_config.wakeup_words}")
+            for wakeup_word in model_config.wakeup_words:
+                if wakeup_word in self.wakeup_word_to_model:
+                    old_model = next((name for name, config in self.models.items() 
+                                     if config == self.wakeup_word_to_model[wakeup_word]), '未知')
+                    logger.warning(f"唤醒词冲突! '{wakeup_word}' 已绑定到模型 '{old_model}'，"
+                                  f"现在被覆盖绑定到 '{model_name}'")
+                self.wakeup_word_to_model[wakeup_word] = model_config
+                logger.info(f"唤醒词 '{wakeup_word}' 成功绑定到模型 '{model_name}'")
+        
+        logger.info(f"唤醒词映射完成，共加载 {len(self.wakeup_word_to_model)} 个唤醒词")
+
     def get_user_model(self, user_id: str) -> ModelConfig:
         """获取用户当前使用的模型"""
         if self.remember_user_model and user_id in self.user_models:
@@ -347,25 +366,59 @@ class Dify(PluginBase):
 
     def get_model_from_message(self, content: str, user_id: str) -> tuple[ModelConfig, str, bool]:
         """根据消息内容判断使用哪个模型，并返回是否是切换模型的命令"""
-        content = content.lower()
+        original_content = content  # 保留原始内容
+        content = content.lower()  # 只在检测时使用小写版本
+        
         # 检查是否是切换模型的命令
         if content.endswith("切换"):
             for model_name, model_config in self.models.items():
                 for trigger in model_config.trigger_words:
                     if content.startswith(trigger.lower()):
                         self.set_user_model(user_id, model_config)
+                        logger.info(f"用户 {user_id} 切换模型到 {model_name}")
                         return model_config, "", True
-            return self.get_user_model(user_id), content, False
+            return self.get_user_model(user_id), original_content, False
 
+        # 检查是否使用了唤醒词
+        logger.debug(f"检查消息 '{content}' 是否包含唤醒词")
+        for wakeup_word, model_config in self.wakeup_word_to_model.items():
+            wakeup_lower = wakeup_word.lower()
+            content_lower = content.lower()
+            if content_lower.startswith(wakeup_lower) or f" {wakeup_lower}" in content_lower:
+                model_name = next((name for name, config in self.models.items() if config == model_config), '未知')
+                logger.info(f"消息中检测到唤醒词 '{wakeup_word}'，临时使用模型 '{model_name}'")
+                
+                # 更精确地替换唤醒词
+                # 先找到原文中唤醒词的实际位置和形式
+                original_wakeup = None
+                if content_lower.startswith(wakeup_lower):
+                    # 如果以唤醒词开头，直接取对应长度的原始文本
+                    original_wakeup = original_content[:len(wakeup_lower)]
+                else:
+                    # 如果唤醒词在中间，找到它的位置并获取原始形式
+                    wakeup_pos = content_lower.find(f" {wakeup_lower}") + 1  # +1 是因为包含了前面的空格
+                    if wakeup_pos > 0:
+                        original_wakeup = original_content[wakeup_pos:wakeup_pos+len(wakeup_lower)]
+                
+                if original_wakeup:
+                    # 使用原始形式进行替换，保留大小写
+                    query = original_content.replace(original_wakeup, "", 1).strip()
+                    logger.debug(f"唤醒词处理后的查询: '{query}'")
+                    return model_config, query, False
+        
         # 检查是否是临时使用其他模型
         for model_name, model_config in self.models.items():
             for trigger in model_config.trigger_words:
                 if trigger.lower() in content:
-                    query = content.replace(trigger.lower(), "").strip()
+                    logger.info(f"消息中包含触发词 '{trigger}'，临时使用模型 '{model_name}'")
+                    query = original_content.replace(trigger, "", 1).strip()  # 使用原始内容替换原始触发词
                     return model_config, query, False
 
         # 使用用户当前的模型
-        return self.get_user_model(user_id), content, False
+        current_model = self.get_user_model(user_id)
+        model_name = next((name for name, config in self.models.items() if config == current_model), '默认')
+        logger.debug(f"未检测到特定模型指示，使用用户 {user_id} 当前默认模型 '{model_name}'")
+        return current_model, original_content, False
 
     async def check_and_notify_inactive_users(self, bot: WechatAPIClient):
         # 如果聊天室功能关闭，则直接返回，不进行检查和提醒
@@ -398,7 +451,9 @@ class Dify(PluginBase):
             if await self._check_point(bot, message):
                 logger.debug("积分检查通过，开始调用 Dify API")
                 try:
-                    await self.dify(bot, message, messages, files=files)
+                    # 检查是否有唤醒词或触发词
+                    model, processed_query, is_switch = self.get_model_from_message(messages, user_wxid)
+                    await self.dify(bot, message, processed_query, files=files, specific_model=model)
                     logger.debug("成功调用 Dify API 并发送消息")
                 except Exception as e:
                     logger.error(f"调用 Dify API 失败: {e}")
@@ -438,15 +493,31 @@ class Dify(PluginBase):
         buffer = self.chat_manager.message_buffers[key]
         logger.debug(f"安排消息处理 - 用户: {user_wxid}, 群组: {group_id}")
         
+        # 获取buffer中的消息内容
+        buffer_content = "\n".join(buffer.messages) if buffer.messages else ""
+        
         # 检查是否有最近的图片
         image_content = await self.get_cached_image(group_id)
         if image_content:
             try:
                 logger.debug("发现最近的图片，准备上传到 Dify")
+                # 先检查是否有唤醒词获取对应模型
+                wakeup_model = None
+                for wakeup_word, model_config in self.wakeup_word_to_model.items():
+                    wakeup_lower = wakeup_word.lower()
+                    buffer_content_lower = buffer_content.lower()
+                    if buffer_content_lower.startswith(wakeup_lower) or f" {wakeup_lower}" in buffer_content_lower:
+                        wakeup_model = model_config
+                        break
+                
+                # 如果没有找到唤醒词对应的模型，则使用用户当前的模型
+                model_config = wakeup_model or self.get_user_model(user_wxid)
+                
                 file_id = await self.upload_file_to_dify(
                     image_content,
                     "image/jpeg",
-                    group_id
+                    group_id,
+                    model_config=model_config  # 传递正确的模型配置
                 )
                 if file_id:
                     logger.debug(f"图片上传成功，文件ID: {file_id}")
@@ -483,6 +554,9 @@ class Dify(PluginBase):
         await self.check_and_notify_inactive_users(bot)
 
         if not message["IsGroup"]:
+            # 先检查唤醒词或触发词，获取对应模型
+            model, processed_query, is_switch = self.get_model_from_message(content, message["SenderWxid"])
+            
             # 检查是否有最近的图片
             image_content = await self.get_cached_image(message["FromWxid"])
             files = []
@@ -492,7 +566,8 @@ class Dify(PluginBase):
                     file_id = await self.upload_file_to_dify(
                         image_content,
                         "image/jpeg",  # 根据实际图片类型调整
-                        message["FromWxid"]
+                        message["FromWxid"],
+                        model_config=model  # 传递正确的模型配置
                     )
                     if file_id:
                         logger.debug(f"图片上传成功，文件ID: {file_id}")
@@ -506,11 +581,30 @@ class Dify(PluginBase):
                 query = content[len(command):].strip()
             else:
                 query = content
-            if query and self.current_model.api_key:
-                if await self._check_point(bot, message):
-                    await self.dify(bot, message, query, files=files)
+                
+            # 检查API密钥是否可用 - 使用检测到的模型，而非默认模型
+            if query and model.api_key:
+                if await self._check_point(bot, message, model):  # 传递模型到_check_point
+                    if is_switch:
+                        model_name = next(name for name, config in self.models.items() if config == model)
+                        await bot.send_text_message(
+                            message["FromWxid"], 
+                            f"已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。"
+                        )
+                        return
+                    # 使用获取到的模型处理请求
+                    await self.dify(bot, message, processed_query, files=files, specific_model=model)
+                else:
+                    logger.info(f"积分检查失败或模型API密钥无效，无法处理请求")
+            else:
+                if not query:
+                    logger.debug("查询内容为空，不处理")
+                elif not model.api_key:
+                    logger.error(f"模型 {next((name for name, config in self.models.items() if config == model), '未知')} 的API密钥未配置")
+                    await bot.send_text_message(message["FromWxid"], "所选模型的API密钥未配置，请联系管理员")
             return
 
+        # 以下是群聊处理逻辑
         group_id = message["FromWxid"]
         user_wxid = message["SenderWxid"]
             
@@ -520,19 +614,65 @@ class Dify(PluginBase):
                 await bot.send_at_message(group_id, "\n" + CHAT_LEAVE_MESSAGE, [user_wxid])
             return
 
+        # 添加对切换模型命令的特殊处理
+        if content.endswith("切换"):
+            for model_name, model_config in self.models.items():
+                for trigger in model_config.trigger_words:
+                    if content.lower().startswith(trigger.lower()):
+                        self.set_user_model(user_wxid, model_config)
+                        await bot.send_at_message(
+                            group_id,
+                            f"\n已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。",
+                            [user_wxid]
+                        )
+                        return
+
         is_at = self.is_at_message(message)
         is_command = command in self.commands
 
+        # 先检查是否有唤醒词
+        wakeup_detected = False
+        wakeup_model = None
+        processed_wakeup_query = ""
+        
+        for wakeup_word, model_config in self.wakeup_word_to_model.items():
+            # 改用更精确的匹配方式，避免错误识别
+            wakeup_lower = wakeup_word.lower()
+            content_lower = content.lower()
+            if content_lower.startswith(wakeup_lower) or f" {wakeup_lower}" in content_lower:
+                wakeup_detected = True
+                wakeup_model = model_config
+                model_name = next((name for name, config in self.models.items() if config == model_config), '未知')
+                logger.info(f"检测到唤醒词 '{wakeup_word}'，触发模型 '{model_name}'，原始内容: '{content}'")
+                
+                # 更精确地替换唤醒词
+                original_wakeup = None
+                if content_lower.startswith(wakeup_lower):
+                    original_wakeup = content[:len(wakeup_lower)]
+                else:
+                    wakeup_pos = content_lower.find(f" {wakeup_lower}") + 1
+                    if wakeup_pos > 0:
+                        original_wakeup = content[wakeup_pos:wakeup_pos+len(wakeup_lower)]
+                
+                if original_wakeup:
+                    processed_wakeup_query = content.replace(original_wakeup, "", 1).strip()
+                    logger.info(f"处理后的查询内容: '{processed_wakeup_query}'")
+                break
+        
         # 检查是否有最近的图片 - 无论聊天室功能是否启用都获取图片
         files = []
         image_content = await self.get_cached_image(group_id)
         if image_content:
             try:
                 logger.debug("发现最近的图片，准备上传到 Dify")
+                # 如果检测到唤醒词，使用对应模型；否则使用用户当前模型
+                model_config = wakeup_model or self.get_user_model(user_wxid)
+                
                 file_id = await self.upload_file_to_dify(
                     image_content,
                     "image/jpeg",
-                    group_id
+                    group_id,
+                    model_config=model_config  # 传递正确的模型配置
                 )
                 if file_id:
                     logger.debug(f"图片上传成功，文件ID: {file_id}")
@@ -541,23 +681,42 @@ class Dify(PluginBase):
                     logger.error("图片上传失败")
             except Exception as e:
                 logger.error(f"处理图片失败: {e}")
-
-        # 群聊处理逻辑
-        if not self.chat_manager.is_user_active(group_id, user_wxid):
-            if is_at or is_command:
-                # 根据配置决定是否加入聊天室
-                if self.chatroom_enable:
-                    self.chat_manager.add_user(group_id, user_wxid)
-                    await bot.send_at_message(group_id, "\n" + CHAT_JOIN_MESSAGE, [user_wxid])
                 
-                query = content
-                for robot_name in self.robot_names:
-                    query = query.replace(f"@{robot_name}", "").strip()
-                if command in self.commands:
-                    query = query[len(command):].strip()
-                if query:
-                    if await self._check_point(bot, message):
-                        await self.dify(bot, message, query, files=files)
+        # 如果检测到唤醒词，处理唤醒词请求
+        if wakeup_detected and wakeup_model and processed_wakeup_query:
+            if wakeup_model.api_key:  # 检查唤醒词对应模型的API密钥
+                if await self._check_point(bot, message, wakeup_model):  # 传递模型到_check_point
+                    logger.info(f"使用唤醒词对应模型处理请求")
+                    await self.dify(bot, message, processed_wakeup_query, files=files, specific_model=wakeup_model)
+                    return
+                else:
+                    logger.info(f"积分检查失败，无法处理唤醒词请求")
+            else:
+                model_name = next((name for name, config in self.models.items() if config == wakeup_model), '未知')
+                logger.error(f"唤醒词对应模型 '{model_name}' 的API密钥未配置")
+                await bot.send_at_message(group_id, f"\n此模型API密钥未配置，请联系管理员", [user_wxid])
+            return
+
+        # 继续处理@或命令的情况
+        if is_at or is_command:
+            # 群聊处理逻辑
+            if not self.chat_manager.is_user_active(group_id, user_wxid):
+                if is_at or is_command:
+                    # 根据配置决定是否加入聊天室
+                    if self.chatroom_enable:
+                        self.chat_manager.add_user(group_id, user_wxid)
+                        await bot.send_at_message(group_id, "\n" + CHAT_JOIN_MESSAGE, [user_wxid])
+                    
+                    query = content
+                    for robot_name in self.robot_names:
+                        query = query.replace(f"@{robot_name}", "").strip()
+                    if command in self.commands:
+                        query = query[len(command):].strip()
+                    if query:
+                        if await self._check_point(bot, message, model):
+                            # 检查是否有唤醒词或触发词
+                            model, processed_query, is_switch = self.get_model_from_message(query, message["SenderWxid"])
+                            await self.dify(bot, message, processed_query, files=files, specific_model=model)
             return
 
         # 如果聊天室功能被禁用，则所有消息都需要@或命令触发
@@ -613,7 +772,17 @@ class Dify(PluginBase):
                     query = query[len(command):].strip()
                 if query:
                     if await self._check_point(bot, message):
-                        await self.dify(bot, message, query, files=files)
+                        # 检查是否有唤醒词或触发词
+                        model, processed_query, is_switch = self.get_model_from_message(query, message["SenderWxid"])
+                        if is_switch:
+                            model_name = next(name for name, config in self.models.items() if config == model)
+                            await bot.send_at_message(
+                                message["FromWxid"], 
+                                f"\n已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。", 
+                                [message["SenderWxid"]]
+                            )
+                            return
+                        await self.dify(bot, message, processed_query, files=files, specific_model=model)
             else:
                 # 只有在聊天室功能开启时，才缓冲普通消息
                 if self.chatroom_enable:
@@ -658,6 +827,24 @@ class Dify(PluginBase):
             await bot.send_at_message(message["FromWxid"], "\n请输入你的问题或指令。", [message["SenderWxid"]])
             return False
 
+        # 检查唤醒词或触发词，在图片上传前获取对应模型
+        model, processed_query, is_switch = self.get_model_from_message(query, message["SenderWxid"])
+        if is_switch:
+            model_name = next(name for name, config in self.models.items() if config == model)
+            await bot.send_at_message(
+                message["FromWxid"], 
+                f"\n已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。", 
+                [message["SenderWxid"]]
+            )
+            return False
+
+        # 检查模型API密钥是否可用
+        if not model.api_key:
+            model_name = next((name for name, config in self.models.items() if config == model), '未知')
+            logger.error(f"所选模型 '{model_name}' 的API密钥未配置")
+            await bot.send_at_message(message["FromWxid"], f"\n此模型API密钥未配置，请联系管理员", [message["SenderWxid"]])
+            return False
+
         # 检查是否有最近的图片
         files = []
         image_content = await self.get_cached_image(group_id)
@@ -667,7 +854,8 @@ class Dify(PluginBase):
                 file_id = await self.upload_file_to_dify(
                     image_content,
                     "image/jpeg",
-                    group_id
+                    group_id,
+                    model_config=model  # 传递正确的模型配置
                 )
                 if file_id:
                     logger.debug(f"图片上传成功，文件ID: {file_id}")
@@ -677,8 +865,12 @@ class Dify(PluginBase):
             except Exception as e:
                 logger.error(f"处理图片失败: {e}")
 
-        if await self._check_point(bot, message):
-            await self.dify(bot, message, query, files=files)
+        if await self._check_point(bot, message, model):  # 传递正确的模型参数
+            # 使用上面已经获取的模型和处理过的查询
+            logger.info(f"@消息使用模型 '{next((name for name, config in self.models.items() if config == model), '未知')}' 处理请求")
+            await self.dify(bot, message, processed_query, files=files, specific_model=model)
+        else:
+            logger.info(f"积分检查失败，无法处理@消息请求")
         return False
 
     @on_voice_message(priority=20)
@@ -700,14 +892,29 @@ class Dify(PluginBase):
 
         logger.debug(f"语音转文字结果: {query}")
 
-        user_wxid = message["SenderWxid"]
-        try:
-            user_username = await bot.get_nickname(user_wxid) or "未知用户"
-        except:
-            user_username = "未知用户"
+        # 识别可能的唤醒词
+        model, processed_query, is_switch = self.get_model_from_message(query, message["SenderWxid"])
+        if is_switch:
+            model_name = next(name for name, config in self.models.items() if config == model)
+            await bot.send_text_message(
+                message["FromWxid"], 
+                f"已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。"
+            )
+            return False
 
-        if await self._check_point(bot, message):
-            await self.dify(bot, message, query)
+        # 检查识别到的模型API密钥是否可用
+        if not model.api_key:
+            model_name = next((name for name, config in self.models.items() if config == model), '未知')
+            logger.error(f"语音消息选择的模型 '{model_name}' 的API密钥未配置")
+            await bot.send_text_message(message["FromWxid"], "所选模型的API密钥未配置，请联系管理员")
+            return False
+
+        # 积分检查
+        if await self._check_point(bot, message, model):
+            logger.info(f"语音消息使用模型 '{next((name for name, config in self.models.items() if config == model), '未知')}' 处理请求")
+            await self.dify(bot, message, processed_query, specific_model=model)
+        else:
+            logger.info(f"积分检查失败，无法处理语音消息请求")
         return False
 
     def is_at_message(self, message: dict) -> bool:
@@ -719,23 +926,37 @@ class Dify(PluginBase):
                 return True
         return False
 
-    async def dify(self, bot: WechatAPIClient, message: dict, query: str, files=None):
+    async def dify(self, bot: WechatAPIClient, message: dict, query: str, files=None, specific_model=None):
         """发送消息到Dify API"""
         if files is None:
             files = []
 
-        # 根据消息内容选择模型
-        model, processed_query, is_switch = self.get_model_from_message(query, message["SenderWxid"])
-        
-        # 如果是切换模型的命令
-        if is_switch:
-            model_name = next(name for name, config in self.models.items() if config == model)
-            await bot.send_text_message(
-                message["FromWxid"], 
-                f"已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。"
-            )
-            return
+        # 如果提供了specific_model，直接使用；否则根据消息内容选择模型
+        if specific_model:
+            model = specific_model
+            processed_query = query
+            is_switch = False
+            model_name = next((name for name, config in self.models.items() if config == model), '未知')
+            logger.info(f"使用指定的模型 '{model_name}'")
+        else:
+            # 根据消息内容选择模型
+            model, processed_query, is_switch = self.get_model_from_message(query, message["SenderWxid"])
+            model_name = next((name for name, config in self.models.items() if config == model), '默认')
+            logger.info(f"从消息内容选择模型 '{model_name}'")
+            
+            # 如果是切换模型的命令
+            if is_switch:
+                model_name = next(name for name, config in self.models.items() if config == model)
+                await bot.send_text_message(
+                    message["FromWxid"], 
+                    f"已切换到{model_name.upper()}模型，将一直使用该模型直到下次切换。"
+                )
+                return
 
+        # 记录将要使用的模型配置
+        logger.info(f"模型API密钥: {model.api_key[:5]}...{model.api_key[-5:] if len(model.api_key) > 10 else ''}")
+        logger.info(f"模型API端点: {model.base_url}")
+        
         # 处理文件上传
         formatted_files = []
         for file_id in files:
@@ -796,7 +1017,7 @@ class Dify(PluginBase):
                                 ai_resp = resp_json.get("answer", "")
                             elif event == "message_file":
                                 file_url = resp_json.get("url", "")
-                                await self.dify_handle_image(bot, message, file_url)
+                                await self.dify_handle_image(bot, message, file_url, model_config=model)
                             elif event == "error":
                                 await self.dify_handle_error(bot, message,
                                                             resp_json.get("task_id", ""),
@@ -811,8 +1032,10 @@ class Dify(PluginBase):
                         ai_resp = ai_resp.rstrip()
                         logger.debug(f"Dify响应: {ai_resp}")
                     elif resp.status == 404:
+                        logger.warning("会话ID不存在，重置会话ID并重试")
                         self.db.save_llm_thread_id(message["FromWxid"], "", "dify")
-                        return await self.dify(bot, message, query)
+                        # 重要：在递归调用时必须传递原始模型，不要重新选择
+                        return await self.dify(bot, message, processed_query, files=files, specific_model=model)
                     elif resp.status == 400:
                         return await self.handle_400(bot, message, resp)
                     elif resp.status == 500:
@@ -821,12 +1044,12 @@ class Dify(PluginBase):
                         return await self.handle_other_status(bot, message, resp)
 
             if ai_resp:
-                await self.dify_handle_text(bot, message, ai_resp)
+                await self.dify_handle_text(bot, message, ai_resp, model)
             else:
                 logger.warning("Dify未返回有效响应")
         except Exception as e:
             logger.error(f"Dify API 调用失败: {e}")
-            await self.hendle_exceptions(bot, message)
+            await self.hendle_exceptions(bot, message, model_config=model)
 
     async def download_file(self, url: str) -> tuple[bytes, str]:
         """
@@ -837,7 +1060,7 @@ class Dify(PluginBase):
                 content_type = resp.headers.get('Content-Type', '')
                 return await resp.read(), content_type
 
-    async def upload_file_to_dify(self, file_content: bytes, mime_type: str, user: str) -> Optional[str]:
+    async def upload_file_to_dify(self, file_content: bytes, mime_type: str, user: str, model_config=None) -> Optional[str]:
         """
         上传文件到Dify并返回文件ID
         """
@@ -860,14 +1083,16 @@ class Dify(PluginBase):
                 logger.warning(f"图片格式转换失败: {e}")
                 return None
 
-            headers = {"Authorization": f"Bearer {self.current_model.api_key}"}
+            # 使用传入的model_config，如果没有则使用默认模型
+            model = model_config or self.current_model
+            headers = {"Authorization": f"Bearer {model.api_key}"}
             formdata = aiohttp.FormData()
             formdata.add_field("file", file_content, 
                               filename=f"file.{mime_type.split('/')[-1]}", 
                               content_type=mime_type)
             formdata.add_field("user", user)
 
-            url = f"{self.current_model.base_url}/files/upload"
+            url = f"{model.base_url}/files/upload"
             async with aiohttp.ClientSession(proxy=self.http_proxy) as session:
                 async with session.post(url, headers=headers, data=formdata) as resp:
                     if resp.status in (200, 201):
@@ -882,7 +1107,10 @@ class Dify(PluginBase):
             logger.error(f"上传文件时发生错误: {e}")
             return None
 
-    async def dify_handle_text(self, bot: WechatAPIClient, message: dict, text: str):
+    async def dify_handle_text(self, bot: WechatAPIClient, message: dict, text: str, model_config=None):
+        # 使用传入的model_config，如果没有则使用默认模型
+        model = model_config or self.current_model
+        
         # 匹配Dify返回的图片引用格式
         image_pattern = r'\[(.*?)\]\((.*?)\)'
         matches = re.findall(image_pattern, text)
@@ -907,11 +1135,11 @@ class Dify(PluginBase):
                 # 如果URL是相对路径,添加base_url
                 if url.startswith('/files'):
                     # 移除base_url中可能的v1路径
-                    base_url = self.current_model.base_url.replace('/v1', '')
+                    base_url = model.base_url.replace('/v1', '')
                     url = f"{base_url}{url}"
                 
                 logger.debug(f"处理图片链接: {url}")
-                headers = {"Authorization": f"Bearer {self.current_model.api_key}"}
+                headers = {"Authorization": f"Bearer {model.api_key}"}
                 async with aiohttp.ClientSession(proxy=self.http_proxy) as session:
                     async with session.get(url, headers=headers) as resp:
                         if resp.status == 200:
@@ -950,7 +1178,7 @@ class Dify(PluginBase):
         pattern = r'\$\$[^$$]+\]\$\$https?:\/\/[^\s$$]+\)'
         text = re.sub(pattern, '', text)
 
-    async def dify_handle_image(self, bot: WechatAPIClient, message: dict, image: Union[str, bytes]):
+    async def dify_handle_image(self, bot: WechatAPIClient, message: dict, image: Union[str, bytes], model_config=None):
         if isinstance(image, str) and image.startswith("http"):
             try:
                 async with aiohttp.ClientSession(proxy=self.http_proxy) as session:
@@ -997,26 +1225,26 @@ class Dify(PluginBase):
         await bot.send_text_message(message["FromWxid"], ai_resp)
 
     @staticmethod
-    async def hendle_exceptions(bot: WechatAPIClient, message: dict):
+    async def hendle_exceptions(bot: WechatAPIClient, message: dict, model_config=None):
         output = (XYBOT_PREFIX +
                   "🙅对不起，出现错误！\n"
                   f"错误信息：\n"
                   f"{traceback.format_exc()}")
         await bot.send_text_message(message["FromWxid"], output)
 
-    async def _check_point(self, bot: WechatAPIClient, message: dict) -> bool:
+    async def _check_point(self, bot: WechatAPIClient, message: dict, model_config=None) -> bool:
         wxid = message["SenderWxid"]
         if wxid in self.admins and self.admin_ignore:
             return True
         elif self.db.get_whitelist(wxid) and self.whitelist_ignore:
             return True
         else:
-            if self.db.get_points(wxid) < self.current_model.price:
+            if self.db.get_points(wxid) < (model_config or self.current_model).price:
                 await bot.send_text_message(message["FromWxid"],
                                             XYBOT_PREFIX +
-                                            INSUFFICIENT_POINTS_MESSAGE.format(price=self.current_model.price))
+                                            INSUFFICIENT_POINTS_MESSAGE.format(price=(model_config or self.current_model).price))
                 return False
-            self.db.add_points(wxid, -self.current_model.price)
+            self.db.add_points(wxid, -((model_config or self.current_model).price))
             return True
 
     async def audio_to_text(self, bot: WechatAPIClient, message: dict) -> str:
