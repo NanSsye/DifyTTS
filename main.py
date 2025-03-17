@@ -277,8 +277,8 @@ class ModelConfig:
 
 class Dify(PluginBase):
     description = "Dify插件"
-    author = "HenryXiaoYang"
-    version = "1.2.1"
+    author = "老夏的金库"
+    version = "1.3.1"
 
     def __init__(self):
         super().__init__()
@@ -308,6 +308,7 @@ class Dify(PluginBase):
             self.audio_to_text_url = plugin_config.get("audio-to-text-url", "")
             self.text_to_audio_url = plugin_config.get("text-to-audio-url", "")
             self.remember_user_model = plugin_config.get("remember_user_model", True)
+            self.chatroom_enable = plugin_config.get("chatroom_enable", True)  # 添加聊天室功能开关
 
             # 加载所有模型配置
             self.models = {}
@@ -367,6 +368,10 @@ class Dify(PluginBase):
         return self.get_user_model(user_id), content, False
 
     async def check_and_notify_inactive_users(self, bot: WechatAPIClient):
+        # 如果聊天室功能关闭，则直接返回，不进行检查和提醒
+        if not self.chatroom_enable:
+            return
+        
         inactive_users = self.chat_manager.check_and_remove_inactive_users()
         for group_id, user_wxid, status in inactive_users:
             if status == "away":
@@ -518,7 +523,7 @@ class Dify(PluginBase):
         is_at = self.is_at_message(message)
         is_command = command in self.commands
 
-        # 检查是否有最近的图片
+        # 检查是否有最近的图片 - 无论聊天室功能是否启用都获取图片
         files = []
         image_content = await self.get_cached_image(group_id)
         if image_content:
@@ -537,10 +542,14 @@ class Dify(PluginBase):
             except Exception as e:
                 logger.error(f"处理图片失败: {e}")
 
+        # 群聊处理逻辑
         if not self.chat_manager.is_user_active(group_id, user_wxid):
             if is_at or is_command:
-                self.chat_manager.add_user(group_id, user_wxid)
-                await bot.send_at_message(group_id, "\n" + CHAT_JOIN_MESSAGE, [user_wxid])
+                # 根据配置决定是否加入聊天室
+                if self.chatroom_enable:
+                    self.chat_manager.add_user(group_id, user_wxid)
+                    await bot.send_at_message(group_id, "\n" + CHAT_JOIN_MESSAGE, [user_wxid])
+                
                 query = content
                 for robot_name in self.robot_names:
                     query = query.replace(f"@{robot_name}", "").strip()
@@ -551,6 +560,19 @@ class Dify(PluginBase):
                         await self.dify(bot, message, query, files=files)
             return
 
+        # 如果聊天室功能被禁用，则所有消息都需要@或命令触发
+        if not self.chatroom_enable:
+            if is_at or is_command:
+                query = content
+                for robot_name in self.robot_names:
+                    query = query.replace(f"@{robot_name}", "").strip()
+                if command in self.commands:
+                    query = query[len(command):].strip()
+                if query:
+                    if await self._check_point(bot, message):
+                        await self.dify(bot, message, query, files=files)
+            return
+            
         if content == "查看状态":
             status_msg = self.chat_manager.format_room_status(group_id)
             await bot.send_at_message(group_id, "\n" + status_msg, [user_wxid])
@@ -593,8 +615,10 @@ class Dify(PluginBase):
                     if await self._check_point(bot, message):
                         await self.dify(bot, message, query, files=files)
             else:
-                await self.chat_manager.add_message_to_buffer(group_id, user_wxid, content, files)
-                await self.schedule_message_processing(bot, group_id, user_wxid)
+                # 只有在聊天室功能开启时，才缓冲普通消息
+                if self.chatroom_enable:
+                    await self.chat_manager.add_message_to_buffer(group_id, user_wxid, content, files)
+                    await self.schedule_message_processing(bot, group_id, user_wxid)
         return
 
     @on_at_message(priority=20)
@@ -623,8 +647,10 @@ class Dify(PluginBase):
             return False
 
         if not self.chat_manager.is_user_active(group_id, user_wxid):
+            # 根据配置决定是否加入聊天室并发送欢迎消息
             self.chat_manager.add_user(group_id, user_wxid)
-            await bot.send_at_message(group_id, "\n" + CHAT_JOIN_MESSAGE, [user_wxid])
+            if self.chatroom_enable:
+                await bot.send_at_message(group_id, "\n" + CHAT_JOIN_MESSAGE, [user_wxid])
 
         logger.debug(f"提取到的 query: {query}")
 
@@ -632,8 +658,27 @@ class Dify(PluginBase):
             await bot.send_at_message(message["FromWxid"], "\n请输入你的问题或指令。", [message["SenderWxid"]])
             return False
 
+        # 检查是否有最近的图片
+        files = []
+        image_content = await self.get_cached_image(group_id)
+        if image_content:
+            try:
+                logger.debug("@消息中发现最近的图片，准备上传到 Dify")
+                file_id = await self.upload_file_to_dify(
+                    image_content,
+                    "image/jpeg",
+                    group_id
+                )
+                if file_id:
+                    logger.debug(f"图片上传成功，文件ID: {file_id}")
+                    files = [file_id]
+                else:
+                    logger.error("图片上传失败")
+            except Exception as e:
+                logger.error(f"处理图片失败: {e}")
+
         if await self._check_point(bot, message):
-            await self.dify(bot, message, query)
+            await self.dify(bot, message, query, files=files)
         return False
 
     @on_voice_message(priority=20)
@@ -1174,318 +1219,6 @@ class Dify(PluginBase):
         """处理文件消息"""
         if not self.enable:
             return
-
-        temp_path = None
-        saved_path = None
-        try:
-            # 解析XML
-            xml_content = message.get("Content")
-            if not xml_content:
-                return
-                
-            root = ET.fromstring(xml_content)
-            appmsg = root.find("appmsg")
-            if appmsg is None:
-                return
-                
-            # 获取文件信息
-            title = appmsg.find("title").text if appmsg.find("title") is not None else ""
-            file_ext = ""
-            attachinfo = appmsg.find("appattach")
-            if attachinfo is not None:
-                file_ext = attachinfo.find("fileext").text if attachinfo.find("fileext") is not None else ""
-                attachid = attachinfo.find("attachid").text if attachinfo.find("attachid") is not None else ""
-                totallen = attachinfo.find("totallen")
-                file_size = int(totallen.text) if totallen is not None else 0
-                
-            if not title or not attachid:
-                logger.error("文件信息不完整")
-                return
-                
-            # 检查文件大小限制 (设置为10MB)
-            MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB in bytes
-            if file_size > MAX_FILE_SIZE:
-                logger.error(f"文件过大: {file_size} 字节 (最大限制: {MAX_FILE_SIZE} 字节)")
-                await bot.send_text_message(message["FromWxid"], 
-                    f"文件过大（{file_size/1024/1024:.1f}MB），超出上传限制（{MAX_FILE_SIZE/1024/1024:.1f}MB）。\n"
-                    f"请压缩文件或分割后重试。")
-                return
-                
-            logger.info(f"检测到文件: {title}, 类型: {file_ext}, 附件ID: {attachid}, 大小: {file_size/1024/1024:.1f}MB")
-            
-            try:
-                # 下载文件
-                logger.info(f"开始下载文件，总大小: {file_size} 字节")
-                file_content = await self.download_large_file(bot, attachid, file_size)
-                if not file_content:
-                    logger.error("文件下载失败")
-                    await bot.send_text_message(message["FromWxid"], "文件下载失败，请重试。")
-                    return
-
-                # 验证文件大小
-                actual_size = len(file_content)
-                if actual_size != file_size:
-                    logger.error(f"文件大小不匹配: 预期 {file_size} 字节, 实际 {actual_size} 字节")
-                    await bot.send_text_message(message["FromWxid"], 
-                        f"文件下载不完整。\n"
-                        f"预期大小：{file_size/1024:.1f}KB\n"
-                        f"实际大小：{actual_size/1024:.1f}KB\n"
-                        f"请重试或联系管理员。")
-                    return
-
-                # 保存文件
-                filename = title
-                if not os.path.splitext(filename)[1] and file_ext:
-                    filename = f"{filename}.{file_ext}"
-                    
-                # 临时文件路径
-                temp_path = os.path.join("temp", filename)
-                os.makedirs("temp", exist_ok=True)
-                
-                # 永久存储路径
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                saved_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
-                saved_path = os.path.join(self.files_dir, saved_filename)
-                
-                try:
-                    # 先写入临时文件
-                    with open(temp_path, "wb") as f:
-                        f.write(file_content)
-                    
-                    # 验证临时文件大小
-                    temp_size = os.path.getsize(temp_path)
-                    if temp_size != actual_size:
-                        raise Exception(f"临时文件大小不匹配: 预期 {actual_size} 字节, 实际 {temp_size} 字节")
-                    
-                    # 验证成功后移动到永久存储目录
-                    shutil.move(temp_path, saved_path)
-                    
-                    # 再次验证永久文件大小
-                    saved_size = os.path.getsize(saved_path)
-                    if saved_size != actual_size:
-                        raise Exception(f"保存的文件大小不匹配: 预期 {actual_size} 字节, 实际 {saved_size} 字节")
-                        
-                    logger.info(f"文件已成功保存到: {saved_path}")
-                    logger.info(f"文件大小: {saved_size} 字节")
-                except Exception as e:
-                    logger.error(f"保存文件失败: {e}")
-                    # 清理可能存在的不完整文件
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                    if os.path.exists(saved_path):
-                        os.remove(saved_path)
-                    await bot.send_text_message(message["FromWxid"], f"保存文件失败: {str(e)}")
-                    return
-                
-                # 上传文件到 Dify
-                dify_file_id = None
-                try:
-                    # 准备上传请求
-                    headers = {"Authorization": f"Bearer {self.current_model.api_key}"}
-                    formdata = aiohttp.FormData()
-                    formdata.add_field("file", file_content,
-                                    filename=filename,
-                                    content_type=mimetypes.guess_type(filename)[0] or 'application/octet-stream')
-                    formdata.add_field("user", message["FromWxid"])
-
-                    # 上传文件
-                    url = f"{self.current_model.base_url}/files/upload"
-                    async with aiohttp.ClientSession(proxy=self.http_proxy) as session:
-                        async with session.post(url, headers=headers, data=formdata) as resp:
-                            response_text = await resp.text()
-                            if resp.status in (200, 201):
-                                result = await resp.json()
-                                dify_file_id = result.get("id")
-                                if dify_file_id:
-                                    logger.info(f"文件上传成功 - ID: {dify_file_id}")
-                                    
-                                    # 根据文件扩展名确定文件类型
-                                    file_type = "document"  # 默认类型为document
-                                    ext = file_ext.lower()
-                                    if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg']:
-                                        file_type = "image"
-                                    elif ext in ['mp3', 'm4a', 'wav', 'webm', 'amr']:
-                                        file_type = "audio"
-                                    elif ext in ['mp4', 'mov', 'mpeg', 'mpga']:
-                                        file_type = "video"
-                                    elif ext in ['txt', 'md', 'markdown', 'pdf', 'html', 'xlsx', 'xls', 'docx', 'csv', 'eml', 'msg', 'pptx', 'ppt', 'xml', 'epub']:
-                                        file_type = "document"
-                                    else:
-                                        file_type = "document"  # 其他类型都作为document处理
-                                    
-                                    chat_payload = {
-                                        "inputs": {},
-                                        "query": f"请分析这个文件的内容：{filename}",
-                                        "response_mode": "streaming",
-                                        "user": message["FromWxid"],
-                                        "files": [{
-                                            "type": file_type,
-                                            "transfer_method": "local_file",
-                                            "upload_file_id": dify_file_id
-                                        }]
-                                    }
-                                    
-                                    # 发送聊天消息
-                                    chat_url = f"{self.current_model.base_url}/chat-messages"
-                                    async with session.post(chat_url, headers=headers, json=chat_payload) as chat_resp:
-                                        if chat_resp.status == 200:
-                                            ai_resp = ""
-                                            async for line in chat_resp.content:
-                                                line = line.decode("utf-8").strip()
-                                                if not line or line == "event: ping":
-                                                    continue
-                                                elif line.startswith("data: "):
-                                                    line = line[6:]
-                                                try:
-                                                    resp_json = json.loads(line)
-                                                    event = resp_json.get("event", "")
-                                                    if event == "message":
-                                                        ai_resp += resp_json.get("answer", "")
-                                                    elif event == "message_end":
-                                                        break
-                                                except json.JSONDecodeError:
-                                                    continue
-                                            
-                                            await bot.send_text_message(message["FromWxid"], 
-                                                f"文件上传成功！\n"
-                                                f"文件名: {filename}\n"
-                                                f"文件ID: {dify_file_id}\n"
-                                                f"本地保存位置: {saved_path}\n\n"
-                                                f"AI 分析结果：\n{ai_resp}")
-                                        else:
-                                            error_text = await chat_resp.text()
-                                            logger.error(f"发送聊天消息失败: {error_text}")
-                                            await bot.send_text_message(message["FromWxid"], 
-                                                f"文件已上传，但分析失败。\n"
-                                                f"文件ID: {dify_file_id}\n"
-                                                f"本地保存位置: {saved_path}")
-                                else:
-                                    logger.error(f"文件上传成功但未返回ID: {response_text}")
-                                    await bot.send_text_message(message["FromWxid"], 
-                                        f"文件上传成功但未获取到ID\n"
-                                        f"本地保存位置: {saved_path}")
-                            elif resp.status == 400:
-                                error_info = json.loads(response_text)
-                                error_msg = {
-                                    "no_file_uploaded": "未提供文件",
-                                    "too_many_files": "一次只能上传一个文件",
-                                    "unsupported_preview": "该文件不支持预览",
-                                    "unsupported_estimate": "该文件不支持估算"
-                                }.get(error_info.get("error"), "未知错误")
-                                logger.error(f"上传失败: {error_msg}")
-                                await bot.send_text_message(message["FromWxid"], 
-                                    f"文件上传失败: {error_msg}")
-                            elif resp.status == 413:
-                                logger.error("文件太大")
-                                await bot.send_text_message(message["FromWxid"], 
-                                    "文件太大，无法上传")
-                            elif resp.status == 415:
-                                logger.error("不支持的文件类型")
-                                await bot.send_text_message(message["FromWxid"], 
-                                    "不支持的文件类型")
-                            elif resp.status == 503:
-                                error_info = json.loads(response_text)
-                                error_msg = {
-                                    "s3_connection_failed": "无法连接到存储服务",
-                                    "s3_permission_denied": "无权限上传文件",
-                                    "s3_file_too_large": "文件超出大小限制"
-                                }.get(error_info.get("error"), "存储服务异常")
-                                logger.error(f"存储服务错误: {error_msg}")
-                                await bot.send_text_message(message["FromWxid"], 
-                                    f"文件上传失败: {error_msg}")
-                            else:
-                                logger.error(f"上传失败: HTTP {resp.status} - {response_text}")
-                                await bot.send_text_message(message["FromWxid"], 
-                                    f"文件上传失败\n"
-                                    f"状态码: {resp.status}\n"
-                                    f"错误信息: {response_text}")
-                except Exception as e:
-                    logger.error(f"上传文件时发生错误: {e}")
-                    logger.error(traceback.format_exc())
-                    await bot.send_text_message(message["FromWxid"], f"处理文件失败: {str(e)}")
-                
-                # 根据文件类型处理预览
-                if file_ext.lower() in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
-                    # 验证图片文件完整性
-                    try:
-                        with open(saved_path, 'rb') as f:
-                            Image.open(io.BytesIO(f.read()))
-                        await bot.send_image_message(message["FromWxid"], file_content)
-                    except Exception as e:
-                        logger.error(f"图片文件验证失败: {e}")
-                        raise
-                elif file_ext.lower() in ['mp3', 'wav', 'ogg', 'm4a']:
-                    await bot.send_voice_message(message["FromWxid"], voice=file_content, format=file_ext)
-                elif file_ext.lower() in ['mp4', 'avi', 'mov', 'mkv']:
-                    await bot.send_video_message(message["FromWxid"], video=file_content, image="None")
-                
-                # 如果是图片，添加到缓存
-                if file_ext.lower() in ['jpg', 'jpeg', 'png', 'gif', 'bmp']:
-                    self.image_cache[message["FromWxid"]] = {
-                        "content": file_content,
-                        "timestamp": time.time()
-                    }
-                
-            except Exception as e:
-                logger.error(f"处理文件失败: {e}")
-                logger.error(traceback.format_exc())
-                await bot.send_text_message(message["FromWxid"], f"处理文件失败: {str(e)}")
-                # 如果保存失败，清理已创建的文件
-                if saved_path and os.path.exists(saved_path):
-                    try:
-                        os.remove(saved_path)
-                    except Exception as cleanup_error:
-                        logger.error(f"清理失败的文件时出错: {cleanup_error}")
-                
-        except Exception as e:
-            logger.error(f"解析文件消息失败: {e}")
-            logger.error(traceback.format_exc())
-        finally:
-            # 只清理临时文件，保留永久存储的文件
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception as e:
-                    logger.error(f"清理临时文件失败: {e}")
-
-    async def download_large_file(self, bot: WechatAPIClient, attachid: str, total_size: int) -> Optional[bytes]:
-        """分块下载大文件"""
-        try:
-            logger.info(f"开始下载文件，总大小: {total_size} 字节")
-            # 尝试直接下载整个文件
-            file_content = await bot.download_attach(attachid)
-            
-            if not file_content:
-                logger.error("文件下载失败")
-                return None
-                
-            # 处理返回的数据
-            if isinstance(file_content, str):
-                try:
-                    if file_content.startswith('data:'):
-                        _, file_content = file_content.split(',', 1)
-                        file_content = base64.b64decode(file_content)
-                    elif file_content.startswith('b\'') or file_content.startswith('b"'):
-                        file_content = eval(file_content)
-                    else:
-                        file_content = base64.b64decode(file_content)
-                except Exception as e:
-                    logger.error(f"转换文件数据失败: {e}")
-                    file_content = file_content.encode('utf-8')
-            
-            if not isinstance(file_content, bytes):
-                logger.error(f"文件数据类型错误: {type(file_content)}")
-                return None
-                
-            actual_size = len(file_content)
-            if actual_size != total_size:
-                logger.error(f"文件大小不匹配: 预期 {total_size} 字节, 实际 {actual_size} 字节")
-                return None
-                
-            logger.info(f"文件下载完成: {actual_size} 字节")
-            return file_content
-            
-        except Exception as e:
-            logger.error(f"下载文件时发生错误: {e}")
-            logger.error(traceback.format_exc())
-            return None
+        # 文件消息处理功能已禁用，直接返回
+        logger.info("文件消息处理功能已禁用，跳过处理")
+        return
