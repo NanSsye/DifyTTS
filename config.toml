@@ -18,13 +18,12 @@ whitelist_ignore = true        # 白名单用户是否免积分，设为true则�
 http-proxy = ""                # HTTP代理配置，格式为"http://代理地址:端口"，不需要则留空
 voice_reply_all = false        # 是否总是使用语音回复，设为true则所有回复都转为语音消息
 robot-names = ["毛球", "DifyBot", "智能助手"]
-audio-to-text-url = "http://192.168.6.19:8080/v1/audio-to-text"
-text-to-audio-url = "http://192.168.6.19:8080/v1/text-to-audio"
+# 音频转文本和文本转音频 URL 将基于各模型的 base-url 自动构建
 
 [Dify.models]
 # 学姐模型配置
 [Dify.models."学姐"]
-api-key = "app-9hiqqQIi8bZfvmaFc56WPyYH"
+api-key = "app-zPoThZ1qVxei3DRVS7k4ZLqN"
 base-url = "http://192.168.6.19:8080/v1"
 trigger-words = ["@学姐"]
 wakeup-words = ["学姐"]
